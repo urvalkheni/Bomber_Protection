@@ -64,12 +64,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void requestRuntimePermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissionLauncher.launch(new String[]{
+                Manifest.permission.READ_CONTACTS,
+                Manifest.permission.POST_NOTIFICATIONS
+            });
+            return;
+        }
+
         permissionLauncher.launch(new String[]{
-            Manifest.permission.RECEIVE_SMS,
-            Manifest.permission.READ_SMS,
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.POST_NOTIFICATIONS
+            Manifest.permission.READ_CONTACTS
         });
     }
 
@@ -93,11 +97,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshStats() {
         AttackLogStore.Stats stats = AttackLogStore.getStats(this);
-        String defaultStatus = getPackageName().equals(Telephony.Sms.getDefaultSmsPackage(this))
+        boolean isDefaultSmsApp = getPackageName().equals(Telephony.Sms.getDefaultSmsPackage(this));
+        String defaultStatus = isDefaultSmsApp
             ? getString(R.string.default_sms_yes)
             : getString(R.string.default_sms_no);
 
-        String permissionStatus = ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
+        String permissionStatus = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS)
             == PackageManager.PERMISSION_GRANTED
             ? getString(R.string.permission_ok)
             : getString(R.string.permission_missing);
