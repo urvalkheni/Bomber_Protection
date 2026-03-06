@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">SMS Shield</string>
+    <string name="title">SMS Shield</string>
+    <string name="shield_switch">Shield Mode</string>
+    <string name="contacts_only_switch">Allow only contacts + whitelist</string>
+    <string name="stats_placeholder">Blocked Today: 0</string>
+    <string name="stats_template">Blocked Today: %1$d\nAttackers: %2$d\nDefault SMS App: %3$s\nPermissions: %4$s</string>
+    <string name="open_logs">Open Attack Logs</string>
+    <string name="manage_whitelist">Whitelist Manager</string>
+    <string name="log_title">Attack Logs</string>
+    <string name="whitelist_title">Whitelist Manager</string>
+    <string name="whitelist_hint">Phone number or sender ID</string>
+    <string name="add_number">Add to Whitelist</string>
+    <string name="long_press_remove">Long press a row to remove.</string>
+    <string name="enter_number">Enter a number first.</string>
+    <string name="no_logs">No logs yet.</string>
+    <string name="default_sms_yes">Yes</string>
+    <string name="default_sms_no">No</string>
+    <string name="permission_ok">Granted</string>
+    <string name="permission_missing">Missing</string>
+</resources>
