@@ -1,26 +1,25 @@
 package com.smsshield.bomberprotection;
 
 import android.content.Context;
-import android.content.SharedPreferences;
+
+import androidx.annotation.NonNull;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 public final class AttackLogStore {
-    private static final String PREF = "attack_logs";
-    private static final String KEY_LOGS = "logs";
-    private static final String KEY_DAY = "day";
-    private static final String KEY_BLOCKED_TODAY = "blocked_today";
-    private static final String KEY_ATTACKERS_TODAY = "attackers_today";
     private static final int MAX_LOG_ITEMS = 200;
 
     private AttackLogStore() {
@@ -32,120 +31,164 @@ public final class AttackLogStore {
         public final long timestamp;
         public final String action;
         public final String reason;
+        public final String escalation;
+        public final String cluster;
 
-        public LogItem(String sender, String body, long timestamp, String action, String reason) {
+        public LogItem(String sender, String body, long timestamp, String action, String reason,
+                       String escalation, String cluster) {
             this.sender = sender;
             this.body = body;
             this.timestamp = timestamp;
             this.action = action;
             this.reason = reason;
+            this.escalation = escalation;
+            this.cluster = cluster;
         }
     }
 
     public static final class Stats {
         public final int blockedToday;
+        public final int silencedToday;
+        public final int suppressedToday;
         public final int attackersToday;
 
-        public Stats(int blockedToday, int attackersToday) {
+        public Stats(int blockedToday, int silencedToday, int suppressedToday, int attackersToday) {
             this.blockedToday = blockedToday;
+            this.silencedToday = silencedToday;
+            this.suppressedToday = suppressedToday;
             this.attackersToday = attackersToday;
         }
     }
 
-    private static SharedPreferences prefs(Context context) {
-        return context.getApplicationContext().getSharedPreferences(PREF, Context.MODE_PRIVATE);
+    private static AttackLogDao dao(Context context) {
+        return ShieldDatabase.get(context).attackLogDao();
     }
 
-    private static String today() {
-        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+    private static long startOfTodayMs() {
+        Calendar calendar = Calendar.getInstance();
+        calendar.set(Calendar.HOUR_OF_DAY, 0);
+        calendar.set(Calendar.MINUTE, 0);
+        calendar.set(Calendar.SECOND, 0);
+        calendar.set(Calendar.MILLISECOND, 0);
+        return calendar.getTimeInMillis();
     }
 
-    private static void ensureDay(Context context) {
-        SharedPreferences p = prefs(context);
-        String day = p.getString(KEY_DAY, "");
-        String now = today();
-        if (!now.equals(day)) {
-            p.edit()
-                .putString(KEY_DAY, now)
-                .putInt(KEY_BLOCKED_TODAY, 0)
-                .putStringSet(KEY_ATTACKERS_TODAY, new HashSet<>())
-                .apply();
-        }
+    private static String sanitize(String value) {
+        return value == null ? "" : value;
     }
 
-    public static synchronized void addLog(Context context, String sender, String body, String action, String reason) {
-        ensureDay(context);
-        SharedPreferences p = prefs(context);
+    public static synchronized void addLog(Context context, String sender, String body, String action,
+                                           String reason) {
+        addLog(context, sender, body, action, reason, "NORMAL", "UNKNOWN", "");
+    }
 
-        JSONArray array;
-        try {
-            array = new JSONArray(p.getString(KEY_LOGS, "[]"));
-        } catch (JSONException e) {
-            array = new JSONArray();
-        }
+    public static synchronized void addLog(Context context, String sender, String body, String action,
+                                           String reason, String escalation, String cluster,
+                                           String templateHash) {
+        AttackLogEntity entity = new AttackLogEntity(
+            System.currentTimeMillis(),
+            sanitize(sender),
+            sanitize(body),
+            sanitize(action),
+            sanitize(reason),
+            sanitize(escalation),
+            sanitize(cluster),
+            sanitize(templateHash)
+        );
 
-        JSONObject obj = new JSONObject();
-        try {
-            obj.put("sender", sender == null ? "" : sender);
-            obj.put("body", body == null ? "" : body);
-            obj.put("timestamp", System.currentTimeMillis());
-            obj.put("action", action);
-            obj.put("reason", reason == null ? "" : reason);
-            array.put(0, obj);
-
-            if (array.length() > MAX_LOG_ITEMS) {
-                JSONArray trimmed = new JSONArray();
-                for (int i = 0; i < MAX_LOG_ITEMS; i++) {
-                    trimmed.put(array.optJSONObject(i));
-                }
-                array = trimmed;
-            }
-        } catch (JSONException ignored) {
-        }
-
-        SharedPreferences.Editor editor = p.edit().putString(KEY_LOGS, array.toString());
-
-        if ("BLOCKED".equals(action)) {
-            int blocked = p.getInt(KEY_BLOCKED_TODAY, 0) + 1;
-            Set<String> attackers = new HashSet<>(p.getStringSet(KEY_ATTACKERS_TODAY, new HashSet<>()));
-            if (sender != null && !sender.isEmpty()) {
-                attackers.add(sender);
-            }
-            editor.putInt(KEY_BLOCKED_TODAY, blocked);
-            editor.putStringSet(KEY_ATTACKERS_TODAY, attackers);
-        }
-
-        editor.apply();
+        AttackLogDao attackLogDao = dao(context);
+        attackLogDao.insert(entity);
+        attackLogDao.trimTo(MAX_LOG_ITEMS);
     }
 
     public static List<LogItem> getLogs(Context context) {
+        List<AttackLogEntity> records = dao(context).recent(MAX_LOG_ITEMS);
         List<LogItem> out = new ArrayList<>();
-        SharedPreferences p = prefs(context);
-        try {
-            JSONArray array = new JSONArray(p.getString(KEY_LOGS, "[]"));
-            for (int i = 0; i < array.length(); i++) {
-                JSONObject item = array.optJSONObject(i);
-                if (item == null) {
-                    continue;
-                }
-                out.add(new LogItem(
-                    item.optString("sender", ""),
-                    item.optString("body", ""),
-                    item.optLong("timestamp", 0L),
-                    item.optString("action", ""),
-                    item.optString("reason", "")
-                ));
-            }
-        } catch (JSONException ignored) {
+        for (AttackLogEntity item : records) {
+            out.add(new LogItem(
+                item.sender,
+                item.body,
+                item.timestamp,
+                item.action,
+                item.reason,
+                item.escalation,
+                item.cluster
+            ));
         }
         return out;
     }
 
     public static Stats getStats(Context context) {
-        ensureDay(context);
-        SharedPreferences p = prefs(context);
-        int blocked = p.getInt(KEY_BLOCKED_TODAY, 0);
-        int attackers = p.getStringSet(KEY_ATTACKERS_TODAY, new HashSet<>()).size();
-        return new Stats(blocked, attackers);
+        long since = startOfTodayMs();
+        AttackLogDao attackLogDao = dao(context);
+        int blocked = attackLogDao.countByActionSince(since, "BLOCKED");
+        int silenced = attackLogDao.countByActionSince(since, "SILENCED");
+        int suppressed = attackLogDao.countByActionSince(since, "SUPPRESSED");
+        int attackers = attackLogDao.uniqueAttackersSince(since);
+        return new Stats(blocked, silenced, suppressed, attackers);
+    }
+
+    public static File exportJson(Context context) throws IOException, JSONException {
+        List<AttackLogEntity> all = dao(context).all();
+        JSONArray array = new JSONArray();
+        for (AttackLogEntity item : all) {
+            JSONObject obj = new JSONObject();
+            obj.put("timestamp", item.timestamp);
+            obj.put("sender", item.sender);
+            obj.put("action", item.action);
+            obj.put("reason", item.reason);
+            obj.put("escalation", item.escalation);
+            obj.put("cluster", item.cluster);
+            obj.put("body", item.body);
+            array.put(obj);
+        }
+
+        String name = "attack_logs_" + stamp() + ".json";
+        File target = new File(exportDir(context), name);
+        writeText(target, array.toString(2));
+        return target;
+    }
+
+    public static File exportCsv(Context context) throws IOException {
+        List<AttackLogEntity> all = dao(context).all();
+        StringBuilder csv = new StringBuilder();
+        csv.append("timestamp,sender,action,reason,escalation,cluster,body\n");
+        for (AttackLogEntity item : all) {
+            csv.append(item.timestamp).append(',')
+                .append(csvCell(item.sender)).append(',')
+                .append(csvCell(item.action)).append(',')
+                .append(csvCell(item.reason)).append(',')
+                .append(csvCell(item.escalation)).append(',')
+                .append(csvCell(item.cluster)).append(',')
+                .append(csvCell(item.body)).append('\n');
+        }
+
+        String name = "attack_logs_" + stamp() + ".csv";
+        File target = new File(exportDir(context), name);
+        writeText(target, csv.toString());
+        return target;
+    }
+
+    private static String stamp() {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+    }
+
+    private static File exportDir(Context context) {
+        File dir = new File(context.getExternalFilesDir(null), "exports");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    private static void writeText(File file, @NonNull String text) throws IOException {
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static String csvCell(String value) {
+        String safe = sanitize(value).replace("\"", "\"\"");
+        return "\"" + safe + "\"";
     }
 }

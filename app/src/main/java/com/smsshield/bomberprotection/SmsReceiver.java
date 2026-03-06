@@ -26,20 +26,31 @@ public class SmsReceiver extends BroadcastReceiver {
         String body = bodyBuilder.toString();
 
         ShieldEngine.Decision decision = ShieldEngine.evaluate(context, sender, body, System.currentTimeMillis());
-        if (decision.block) {
+        if (decision.shouldSuppressDelivery()) {
             abortBroadcast();
             setResultCode(0);
-            AttackLogStore.addLog(context, sender, body, "BLOCKED", decision.reason);
+            AttackLogStore.addLog(
+                context,
+                sender,
+                body,
+                decision.action.name(),
+                decision.reason,
+                decision.escalation.name(),
+                decision.cluster,
+                decision.templateHash
+            );
             return;
         }
 
-        if (decision.silence) {
-            abortBroadcast();
-            setResultCode(0);
-            AttackLogStore.addLog(context, sender, body, "SILENCED", decision.reason);
-            return;
-        }
-
-        AttackLogStore.addLog(context, sender, body, "ALLOWED", decision.reason);
+        AttackLogStore.addLog(
+            context,
+            sender,
+            body,
+            decision.action.name(),
+            decision.reason,
+            decision.escalation.name(),
+            decision.cluster,
+            decision.templateHash
+        );
     }
 }

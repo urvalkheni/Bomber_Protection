@@ -110,7 +110,11 @@ public class MainActivity extends AppCompatActivity {
         String summary = getString(
             R.string.stats_template,
             stats.blockedToday,
+            stats.silencedToday,
+            stats.suppressedToday,
             stats.attackersToday,
+            ShieldEngine.getCurrentEscalation().name(),
+            ShieldEngine.isPanicModeActive() ? getString(R.string.default_sms_yes) : getString(R.string.default_sms_no),
             defaultStatus,
             permissionStatus
         );

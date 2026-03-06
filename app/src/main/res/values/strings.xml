@@ -4,7 +4,7 @@
     <string name="shield_switch">Shield Mode</string>
     <string name="contacts_only_switch">Allow only contacts + whitelist</string>
     <string name="stats_placeholder">Blocked Today: 0</string>
-    <string name="stats_template">Blocked Today: %1$d\nAttackers: %2$d\nDefault SMS App: %3$s\nPermissions: %4$s</string>
+    <string name="stats_template">Blocked: %1$d\nSilenced: %2$d\nSuppressed: %3$d\nAttackers: %4$d\nEscalation: %5$s\nPanic Mode: %6$s\nDefault SMS App: %7$s\nPermissions: %8$s</string>
     <string name="open_logs">Open Attack Logs</string>
     <string name="manage_whitelist">Whitelist Manager</string>
     <string name="log_title">Attack Logs</string>
@@ -14,6 +14,10 @@
     <string name="long_press_remove">Long press a row to remove.</string>
     <string name="enter_number">Enter a number first.</string>
     <string name="no_logs">No logs yet.</string>
+    <string name="export_csv">Export CSV</string>
+    <string name="export_json">Export JSON</string>
+    <string name="export_ok">Exported to: %1$s</string>
+    <string name="export_fail">Export failed: %1$s</string>
     <string name="default_sms_yes">Yes</string>
     <string name="default_sms_no">No</string>
     <string name="permission_ok">Granted</string>
