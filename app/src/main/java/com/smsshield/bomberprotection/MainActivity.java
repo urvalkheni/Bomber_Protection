@@ -7,13 +7,19 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Telephony;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.Button;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
@@ -33,6 +39,7 @@ public class MainActivity extends AppCompatActivity {
         shieldSwitch = findViewById(R.id.switchShield);
         contactsOnlySwitch = findViewById(R.id.switchContactsOnly);
         statsText = findViewById(R.id.textStats);
+        Button expectOtpButton = findViewById(R.id.buttonExpectOtp);
         Button logsButton = findViewById(R.id.buttonLogs);
         Button whitelistButton = findViewById(R.id.buttonWhitelist);
 
@@ -48,6 +55,8 @@ public class MainActivity extends AppCompatActivity {
             SettingsStore.setContactsOnly(this, isChecked);
             refreshStats();
         });
+
+        expectOtpButton.setOnClickListener(v -> showExpectOtpDialog());
 
         logsButton.setOnClickListener(v -> startActivity(new Intent(this, AttackLogActivity.class)));
         whitelistButton.setOnClickListener(v -> startActivity(new Intent(this, WhitelistActivity.class)));
@@ -116,9 +125,56 @@ public class MainActivity extends AppCompatActivity {
             ShieldEngine.getCurrentEscalation().name(),
             ShieldEngine.isPanicModeActive() ? getString(R.string.default_sms_yes) : getString(R.string.default_sms_no),
             defaultStatus,
-            permissionStatus
+            permissionStatus,
+            formatOtpIntentStatus()
         );
         statsText.setText(summary);
+    }
+
+    private String formatOtpIntentStatus() {
+        long remainingMs = SettingsStore.getExpectOtpRemainingMs(this, System.currentTimeMillis());
+        if (remainingMs <= 0L) {
+            return getString(R.string.otp_window_inactive);
+        }
+
+        long seconds = Math.max(1L, remainingMs / 1000L);
+        return getString(R.string.otp_window_active, seconds);
+    }
+
+    private void showExpectOtpDialog() {
+        EditText serviceInput = new EditText(this);
+        serviceInput.setHint(R.string.expect_otp_service_hint);
+        serviceInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        serviceInput.setLayoutParams(new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.expect_otp_dialog_title)
+            .setMessage(R.string.expect_otp_dialog_message)
+            .setView(serviceInput)
+            .setNeutralButton(R.string.expect_otp_any_service, (dialog, which) -> {
+                SettingsStore.startExpectOtpWindow(this);
+                Toast.makeText(this, R.string.expect_otp_started, Toast.LENGTH_SHORT).show();
+                refreshStats();
+            })
+            .setPositiveButton(R.string.expect_otp_start_service, (dialog, which) -> {
+                String serviceKey = serviceInput.getText() == null
+                    ? ""
+                    : serviceInput.getText().toString().trim();
+
+                if (TextUtils.isEmpty(serviceKey)) {
+                    SettingsStore.startExpectOtpWindow(this);
+                    Toast.makeText(this, R.string.expect_otp_started, Toast.LENGTH_SHORT).show();
+                } else {
+                    SettingsStore.startExpectOtpWindowForService(this, serviceKey);
+                    Toast.makeText(this, getString(R.string.expect_otp_started_for_service, serviceKey), Toast.LENGTH_SHORT).show();
+                }
+                refreshStats();
+            })
+            .setNegativeButton(android.R.string.cancel, null)
+            .show();
     }
 
     /**

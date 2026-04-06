@@ -17,12 +17,19 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class AttackLogStore {
     private static final int MAX_LOG_ITEMS = 200;
+    private static final Pattern OTP_PATTERN = Pattern.compile("\\b\\d{4,8}\\b");
+    private static final Pattern DOMAIN_CAPTURE_PATTERN = Pattern.compile("(?:https?://)?([a-z0-9-]+(?:\\.[a-z0-9-]+)+)", Pattern.CASE_INSENSITIVE);
 
     private AttackLogStore() {
     }
@@ -66,6 +73,27 @@ public final class AttackLogStore {
             this.quarantinedToday = quarantinedToday;
             this.attackersToday = attackersToday;
         }
+    }
+
+    public static final class QuarantineGroup {
+        public final String serviceIdentity;
+        public final String messageHash;
+        public final int count;
+        public final long latestTimestamp;
+
+        public QuarantineGroup(String serviceIdentity, String messageHash, int count, long latestTimestamp) {
+            this.serviceIdentity = serviceIdentity;
+            this.messageHash = messageHash;
+            this.count = count;
+            this.latestTimestamp = latestTimestamp;
+        }
+    }
+
+    private static final class GroupAccumulator {
+        String serviceIdentity;
+        String messageHash;
+        int count;
+        long latestTimestamp;
     }
 
     private static AttackLogDao dao(Context context) {
@@ -127,6 +155,53 @@ public final class AttackLogStore {
                 item.campaignId
             ));
         }
+        return out;
+    }
+
+    public static List<QuarantineGroup> getQuarantineOtpGroups(Context context) {
+        List<AttackLogEntity> records = dao(context).recent(MAX_LOG_ITEMS);
+        Map<String, GroupAccumulator> grouped = new HashMap<>();
+
+        for (AttackLogEntity item : records) {
+            if (!"QUARANTINED".equals(item.action)) {
+                continue;
+            }
+            if (!isOtpBody(item.body)) {
+                continue;
+            }
+
+            String serviceIdentity = extractServiceIdentity(item.body, item.sender, item.cluster);
+            String messageHash = sanitize(item.templateHash);
+            String key = serviceIdentity + "::" + messageHash;
+
+            GroupAccumulator acc = grouped.get(key);
+            if (acc == null) {
+                acc = new GroupAccumulator();
+                acc.serviceIdentity = serviceIdentity;
+                acc.messageHash = messageHash;
+                grouped.put(key, acc);
+            }
+
+            acc.count += 1;
+            acc.latestTimestamp = Math.max(acc.latestTimestamp, item.timestamp);
+        }
+
+        List<QuarantineGroup> out = new ArrayList<>();
+        for (GroupAccumulator acc : grouped.values()) {
+            out.add(new QuarantineGroup(
+                acc.serviceIdentity,
+                acc.messageHash,
+                acc.count,
+                acc.latestTimestamp
+            ));
+        }
+
+        Collections.sort(out, (left, right) -> {
+            if (left.count != right.count) {
+                return Integer.compare(right.count, left.count);
+            }
+            return Long.compare(right.latestTimestamp, left.latestTimestamp);
+        });
         return out;
     }
 
@@ -209,6 +284,49 @@ public final class AttackLogStore {
     private static String csvCell(String value) {
         String safe = sanitize(value).replace("\"", "\"\"");
         return "\"" + safe + "\"";
+    }
+
+    private static boolean isOtpBody(String body) {
+        if (body == null || body.isEmpty()) {
+            return false;
+        }
+        return OTP_PATTERN.matcher(body).find();
+    }
+
+    private static String extractServiceIdentity(String body, String sender, String cluster) {
+        String domain = extractDomain(body);
+        if (!domain.isEmpty()) {
+            return domain;
+        }
+
+        String senderSafe = sanitize(sender).trim();
+        if (!senderSafe.isEmpty()) {
+            return senderSafe;
+        }
+
+        String clusterSafe = sanitize(cluster).trim();
+        return clusterSafe.isEmpty() ? "unknown" : clusterSafe;
+    }
+
+    private static String extractDomain(String body) {
+        if (body == null || body.isEmpty()) {
+            return "";
+        }
+        Matcher matcher = DOMAIN_CAPTURE_PATTERN.matcher(body);
+        if (!matcher.find()) {
+            return "";
+        }
+
+        String domain = matcher.group(1);
+        if (domain == null) {
+            return "";
+        }
+
+        String normalized = domain.toLowerCase(Locale.US);
+        if (normalized.startsWith("www.")) {
+            return normalized.substring(4);
+        }
+        return normalized;
     }
 
     public static synchronized boolean restoreQuarantined(Context context, long logId) {

@@ -8,6 +8,7 @@ import android.widget.ListView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.List;
 
 public class AttackLogActivity extends AppCompatActivity {
     private List<AttackLogStore.LogItem> items;
+    private int summaryRowsCount;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -45,7 +47,16 @@ public class AttackLogActivity extends AppCompatActivity {
         });
 
         items = AttackLogStore.getLogs(this);
+        List<AttackLogStore.QuarantineGroup> groups = AttackLogStore.getQuarantineOtpGroups(this);
         List<String> rows = new ArrayList<>();
+
+        for (AttackLogStore.QuarantineGroup group : groups) {
+            String when = DateFormat.format("dd MMM HH:mm:ss", new Date(group.latestTimestamp)).toString();
+            rows.add(getString(R.string.quarantine_group_row, group.serviceIdentity, group.count) + "\n"
+                + getString(R.string.quarantine_group_latest, when));
+        }
+        summaryRowsCount = rows.size();
+
         for (AttackLogStore.LogItem item : items) {
             String when = DateFormat.format("dd MMM HH:mm:ss", new Date(item.timestamp)).toString();
             rows.add("[" + item.action + "] " + item.sender + "\n"
@@ -67,23 +78,44 @@ public class AttackLogActivity extends AppCompatActivity {
         listView.setAdapter(adapter);
 
         listView.setOnItemLongClickListener((parent, view, position, id) -> {
-            if (position < 0 || position >= items.size()) {
+            if (position < summaryRowsCount) {
                 return true;
             }
 
-            AttackLogStore.LogItem item = items.get(position);
-            if (!"QUARANTINED".equals(item.action)) {
-                Toast.makeText(this, R.string.restore_only_quarantined, Toast.LENGTH_SHORT).show();
+            int detailIndex = position - summaryRowsCount;
+            if (detailIndex < 0 || detailIndex >= items.size()) {
                 return true;
             }
 
-            boolean ok = AttackLogStore.restoreQuarantined(this, item.id);
-            if (ok) {
-                Toast.makeText(this, R.string.restore_ok, Toast.LENGTH_SHORT).show();
-                recreate();
-            } else {
-                Toast.makeText(this, R.string.restore_fail, Toast.LENGTH_SHORT).show();
-            }
+            AttackLogStore.LogItem item = items.get(detailIndex);
+            String[] options = new String[]{
+                getString(R.string.restore_message),
+                getString(R.string.mark_sender_trusted)
+            };
+
+            new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.log_action_title, item.sender))
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        if (!"QUARANTINED".equals(item.action)) {
+                            Toast.makeText(this, R.string.restore_only_quarantined, Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+
+                        boolean ok = AttackLogStore.restoreQuarantined(this, item.id);
+                        if (ok) {
+                            Toast.makeText(this, R.string.restore_ok, Toast.LENGTH_SHORT).show();
+                            recreate();
+                        } else {
+                            Toast.makeText(this, R.string.restore_fail, Toast.LENGTH_SHORT).show();
+                        }
+                        return;
+                    }
+
+                    SettingsStore.addLearnedTrustedSender(this, item.sender);
+                    Toast.makeText(this, R.string.sender_trusted_ok, Toast.LENGTH_SHORT).show();
+                })
+                .show();
             return true;
         });
     }
