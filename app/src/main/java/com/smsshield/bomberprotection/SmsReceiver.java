@@ -30,7 +30,7 @@ public class SmsReceiver extends BroadcastReceiver {
             bodyBuilder.append(sms.getDisplayMessageBody());
         }
         String body = bodyBuilder.toString();
-        String simContext = deriveSimContext(messages[0]);
+        String simContext = deriveSimContext(intent);
 
         ShieldEngine.Decision decision = ShieldEngine.evaluate(
             context,
@@ -81,24 +81,43 @@ public class SmsReceiver extends BroadcastReceiver {
         return OTP_PATTERN.matcher(body).find();
     }
 
-    private static String deriveSimContext(SmsMessage smsMessage) {
-        if (smsMessage == null) {
+    private static String deriveSimContext(Intent intent) {
+        if (intent == null) {
             return "sim_unknown";
         }
 
-        try {
-            int subId = smsMessage.getSubscriptionId();
-            if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                return "sim_unknown";
-            }
+        int subId = firstValidExtra(
+            intent,
+            SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX,
+            "subscription",
+            "subId"
+        );
+        int slot = firstValidExtra(
+            intent,
+            SubscriptionManager.EXTRA_SLOT_INDEX,
+            "slot",
+            "simSlot"
+        );
 
-            int slot = SubscriptionManager.getSlotIndex(subId);
-            if (slot >= 0) {
-                return "slot_" + slot;
-            }
+        if (slot >= 0) {
+            return "slot_" + slot;
+        }
+        if (subId != SubscriptionManager.INVALID_SUBSCRIPTION_ID && subId >= 0) {
             return "sub_" + subId;
-        } catch (Exception ignored) {
-            return "sim_unknown";
         }
+        return "sim_unknown";
+    }
+
+    private static int firstValidExtra(Intent intent, String... keys) {
+        for (String key : keys) {
+            if (key == null || key.isEmpty() || !intent.hasExtra(key)) {
+                continue;
+            }
+            int value = intent.getIntExtra(key, Integer.MIN_VALUE);
+            if (value != Integer.MIN_VALUE) {
+                return value;
+            }
+        }
+        return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
     }
 }
