@@ -20,8 +20,14 @@ public interface AttackLogDao {
     @Query("SELECT COUNT(*) FROM attack_logs WHERE timestamp >= :since AND action = :action")
     int countByActionSince(long since, String action);
 
-    @Query("SELECT COUNT(DISTINCT sender) FROM attack_logs WHERE timestamp >= :since AND action IN ('BLOCKED', 'SUPPRESSED')")
+    @Query("SELECT COUNT(DISTINCT sender) FROM attack_logs WHERE timestamp >= :since AND action IN ('BLOCKED', 'SILENCED', 'QUARANTINED')")
     int uniqueAttackersSince(long since);
+
+    @Query("SELECT * FROM attack_logs WHERE id = :id LIMIT 1")
+    AttackLogEntity byId(long id);
+
+    @Query("UPDATE attack_logs SET action = :newAction, reason = :newReason WHERE id = :id")
+    void updateDecision(long id, String newAction, String newReason);
 
     @Query("SELECT * FROM attack_logs ORDER BY timestamp DESC")
     List<AttackLogEntity> all();

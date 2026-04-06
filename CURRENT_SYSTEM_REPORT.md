@@ -3,165 +3,173 @@
 Date: 2026-03-06
 Project: `com.smsshield.bomberprotection`
 
-## 1. Current App Components
+## 1. Device Matrix (Fill/Confirm)
 
-### Core Detection Path
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java`
-- `app/src/main/java/com/smsshield/bomberprotection/SettingsStore.java`
+Status: partially prefilled from your input, hardware-only fields must be confirmed on device.
 
-### UI Screens
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogActivity.java`
-- `app/src/main/java/com/smsshield/bomberprotection/WhitelistActivity.java`
+- Device Brand: Xiaomi
+- Model: Poco X6
+- Android Version: Android 14
+- OS Layer: HyperOS
+- Security Patch: `TODO: confirm from Settings > Security & Privacy > Security update`
+- Region: India
+- Dual SIM: `TODO: Yes/No`
+- Carrier: `TODO: Jio / Airtel / VI`
 
-### SMS Role Eligibility Stubs
-- `app/src/main/java/com/smsshield/bomberprotection/ComposeSmsActivity.java`
-- `app/src/main/java/com/smsshield/bomberprotection/HeadlessSmsSendService.java`
-- `app/src/main/java/com/smsshield/bomberprotection/MmsReceiver.java`
+## 2. Default SMS App Proof
 
-## 2. Permissions and Manifest State
+Path:
+- Settings
+- Apps
+- Default Apps
+- SMS App
 
-From `app/src/main/AndroidManifest.xml`:
-- Declared permissions: `RECEIVE_SMS`, `READ_SMS`, `SEND_SMS`, `READ_CONTACTS`, `POST_NOTIFICATIONS`
-- SMS deliver receiver declared with `android.permission.BROADCAST_SMS`
-- MMS receiver declared with `android.permission.BROADCAST_WAP_PUSH`
+Expected:
+- `SMS Shield (com.smsshield.bomberprotection)`
 
-Key lines:
-- `app/src/main/AndroidManifest.xml:5`
-- `app/src/main/AndroidManifest.xml:6`
-- `app/src/main/AndroidManifest.xml:7`
-- `app/src/main/AndroidManifest.xml:8`
-- `app/src/main/AndroidManifest.xml:9`
-- `app/src/main/AndroidManifest.xml:59`
-- `app/src/main/AndroidManifest.xml:68`
+Current app behavior:
+- `MainActivity` requests SMS role at launch.
+- Full blocking control requires this app to remain default SMS app.
 
-## 3. Runtime Behavior Implemented Today
+## 3. Real Attack Dataset Format (100+ messages)
 
-### Receiver Processing
-In `SmsReceiver`:
-- Handles only `SMS_DELIVER_ACTION`
-- Reconstructs multipart body
-- Calls `ShieldEngine.evaluate(...)`
-- For `BLOCKED` and `SILENCED`, calls `abortBroadcast()` + `setResultCode(0)` and writes log
-- For `ALLOWED`, only writes log
+Implemented forensic JSON export now includes campaign and decision fields while keeping sender/body.
 
-Key lines:
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:12`
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:30`
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:31`
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:32`
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:39`
-- `app/src/main/java/com/smsshield/bomberprotection/SmsReceiver.java:43`
+Example row shape:
 
-### Shield Decision Rules
-In `ShieldEngine`:
-- Per sender limit: `>5 SMS in 60s`
-- Global limit: `>20 SMS in 30s`
-- Contacts-only mode can block non-contact and non-whitelisted senders
-- Suspicious prefix list: `VK`, `AD`, `JD`; if same sender reaches >=3, action is `silence`
-- OTP keyword rule: if message body contains OTP keywords and same sender reaches >=3, action is `block`
+```json
+[
+  {
+    "timestamp": "2026-03-06T12:46:02",
+    "sender": "VM-MARUTI-S",
+    "cluster": "VM",
+    "decision": "QUARANTINED",
+    "reason": "template_reuse_rotation",
+    "message_hash": "otp_template_12ab34cd",
+    "campaign_id": "otp_template_12ab34cd_krxg2",
+    "escalation": "ATTACK",
+    "body": "5279 is your OTP to submit your query"
+  }
+]
+```
 
-Key lines:
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:22`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:25`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:77`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:86`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:94`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:98`
-- `app/src/main/java/com/smsshield/bomberprotection/ShieldEngine.java:103`
+Masking guidance for shared reports:
+- Phone numbers should be masked, for example `XXXXXX6254`.
 
-### Settings and Control Surface
-In `MainActivity`:
-- Shield ON/OFF toggle
-- Contacts-only toggle
-- Requests default SMS role
-- Requests `READ_CONTACTS` and optionally `POST_NOTIFICATIONS`
-- Displays summary counters and status
+## 4. CSV Export Format
 
-Key lines:
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:33`
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:34`
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:56`
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:80`
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:83`
-- `app/src/main/java/com/smsshield/bomberprotection/MainActivity.java:111`
+Implemented CSV header:
 
-## 4. Data and Logging in Current System
+```csv
+timestamp,sender,cluster,decision,reason,message_hash,campaign_id,escalation
+```
 
-`AttackLogStore` stores:
-- Full recent logs in SharedPreferences JSON (`logs`)
-- Max retained log entries: 200
-- Daily counters: `blocked_today`, unique `attackers_today`
-- Note: only `BLOCKED` increments daily counters; `SILENCED` and `ALLOWED` do not increment blocked count
+Example row:
 
-Key lines:
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java:20`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java:24`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java:96`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java:108`
-- `app/src/main/java/com/smsshield/bomberprotection/AttackLogStore.java:144`
+```csv
+2026-03-06T12:46:02,VM-MARUTI-S,VM,QUARANTINED,cluster_lockdown_traffic,otp_template_12ab34cd,otp_template_12ab34cd_krxg2,LOCKDOWN
+```
 
-## 5. Why Messages Are Still Coming (Current Likely Cause)
+## 5. Permission State (Code + Device Check)
 
-Based on current rules and your screenshot pattern (`VM-*`, `JD-*`, multiple different senders):
+Manifest-declared:
+- `RECEIVE_SMS`
+- `READ_SMS`
+- `SEND_SMS`
+- `READ_CONTACTS`
+- `POST_NOTIFICATIONS`
 
-1. Most rules are sender-local.
-- Per-sender and OTP burst rules require multiple messages from the same sender in short time.
-- If attacker rotates sender IDs, sender-local thresholds do not trigger.
+Runtime/device verification path:
+- Settings
+- Apps
+- SMS Shield
+- Permissions
 
-2. Global threshold is very high for real-world OTP bombing.
-- Current global block starts only after more than 20 messages in 30 seconds.
-- Typical attacks with 3-10 messages over 1-2 minutes will pass.
+## 6. Delivery Path Analysis (Device Observation)
 
-3. Suspicious prefix list is narrow.
-- Only `VK`, `AD`, `JD` are handled today.
-- Senders like `VM-*`, `BZ-*`, etc. are not covered unless they hit other limits.
+You should classify observed OTP visibility as:
+- A) Only SMS inbox
+- B) Notification banner
+- C) Bank/app notifications
+- D) Email
 
-4. Contacts-only mode is optional.
-- If contacts-only is OFF, non-contact senders are allowed unless flood rules trigger.
+Engineering note:
+- HyperOS can surface vendor-level notification behavior even when SMS delivery is suppressed.
+- Quarantined messages are now logged and can be restored from logs (long press on `QUARANTINED` row).
 
-5. The app does not currently implement a full inbox/provider management flow for default SMS behavior.
-- Receiver and role stubs exist, but compose/service/mms handlers are minimal stubs.
+## 7. Policy Target
 
-## 6. Current Build/DevOps Status
+Current code default:
+- Strict protection enabled (`strict_policy=true` by default)
 
-- Java is available on system (`JDK 21` detected).
-- Gradle wrapper script/folder is missing in repository (`gradlew.bat` and `gradle/wrapper` not present).
-- Result: reproducible CLI build could not be executed from this workspace as-is.
+Operational profiles:
+- Option A: Play Store compliant (conservative filtering)
+- Option B: Private side-load (full firewall style controls)
 
-## 7. Risk Summary Before Upgrade
+Current implementation is aligned closer to Option B for bomber-defense testing.
 
-High impact gaps:
-- Rotating-sender OTP bombs likely bypass current logic.
-- Thresholds are tuned too loosely for user-level protection.
-- Prefix intelligence is static and very limited.
+## 8. Attack Mode UX
 
-Medium impact gaps:
-- Dashboard stats may under-represent effective suppression because `SILENCED` does not count as blocked.
-- No long-term persistent database for richer analytics (only SharedPreferences JSON).
+Escalation states implemented:
+- `NORMAL`
+- `SUSPICIOUS`
+- `ATTACK`
+- `LOCKDOWN`
 
-Low impact gaps:
-- Whitelist UX is basic but functional.
-- Log screen is functional but non-filterable and non-exportable.
+Lockdown behavior implemented:
+- During lockdown, only contacts + whitelist are allowed.
+- Lockdown duration is configurable (default 5 minutes via `SettingsStore`).
 
-## 8. Baseline Snapshot of What Exists Today
+## 9. Contacts Trust Model
 
-Present and working:
-- Shield toggles and settings persistence
-- Basic SMS receive and evaluate flow
-- Rule-based block/silence/allow decisions
-- Daily counters and attack log UI
-- Whitelist add/remove
-- SMS role request flow
+Trusted:
+- Contacts lookup (`READ_CONTACTS` dependent)
+- Manual whitelist entries
 
-Not fully implemented for advanced protection:
-- Adaptive sender-cluster detection
-- Country/operator/sender normalization intelligence
-- Rule tuning per attack pattern
-- Exportable reporting / forensic dashboard
-- Complete default-SMS app feature set
+Untrusted:
+- Unknown numeric/non-contact senders
+- Rotating enterprise sender campaigns (`[A-Z]{2}-[A-Z0-9]+`)
+- High entropy sender sets
+
+## 10. False Positive Policy
+
+Current default profile:
+- Strict protection (better bomber defense, higher false-positive risk)
+
+Behavioral controls in engine:
+- `BLOCKED` for high-confidence attack patterns
+- `SILENCED` for suspicious bursts
+- `QUARANTINED` for high-risk traffic with restore path
+
+## 11. Why Messages Still Appear (Root Cause Mapping)
+
+Resolved in v2 engine design:
+- Rotating sender IDs: handled through cluster + template + entropy scoring.
+- Enterprise DLT routes: explicitly parsed and scored via enterprise regex.
+- High threshold gap: replaced with adaptive scoring and lower practical trigger points.
+
+Residual real-world caveat:
+- If SMS role is not default, Android delivery pipeline limits interception authority.
+
+## 12. v2 Architecture Status (Implemented)
+
+Implemented layers:
+1. Global rate detection (sliding windows 60s/120s)
+2. Cluster detection (`VM`, `JK`, `BZ`, etc.)
+3. Template similarity via numeric-token-stripped hash
+4. Sender entropy detection
+5. Escalation and lockdown enforcement
+
+Persistence added (Room):
+- `sender_cluster_reputation`
+- `campaign_fingerprint`
+- `attack_logs` extended with `campaignId`
+
+Forensic exports:
+- CSV and JSON include `timestamp`, `sender`, `cluster`, `decision`, `reason`, `message_hash`, `campaign_id`, `escalation`
+
+Dashboard counters:
+- `BLOCKED`, `SILENCED`, `QUARANTINED`, `Attackers`
 
 ---
-This report captures the current implementation state before upgrade work.
+This report reflects the codebase state after the v2 rotating-sender defense upgrade in this workspace.

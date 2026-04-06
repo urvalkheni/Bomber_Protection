@@ -3,6 +3,7 @@ package com.smsshield.bomberprotection;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.provider.ContactsContract;
 import android.telephony.PhoneNumberUtils;
 
@@ -34,8 +35,12 @@ public final class ShieldEngine {
     private static final int CLUSTER_ATTACK_120S = 7;
     private static final int CLUSTER_LOCKDOWN_120S = 10;
 
+    private static final int SUSPICIOUS_SCORE = 4;
+    private static final int ATTACK_SCORE = 7;
+    private static final int LOCKDOWN_SCORE = 10;
+
     private static final Pattern OTP_TOKEN_PATTERN = Pattern.compile("\\b\\d{4,8}\\b");
-    private static final Pattern PREFIX_PATTERN = Pattern.compile("^(?:[A-Z]{2,8})(?:-[A-Z0-9]{1,10})?$");
+    private static final Pattern ENTERPRISE_PATTERN = Pattern.compile("^[A-Z]{2}-[A-Z0-9]+$");
 
     private static final Deque<Long> global60 = new ArrayDeque<>();
     private static final Deque<Long> global120 = new ArrayDeque<>();
@@ -63,7 +68,7 @@ public final class ShieldEngine {
         ALLOW,
         BLOCKED,
         SILENCED,
-        SUPPRESSED
+        QUARANTINED
     }
 
     public static final class Decision {
@@ -72,16 +77,19 @@ public final class ShieldEngine {
         public final EscalationLevel escalation;
         public final boolean panicMode;
         public final String cluster;
-        public final String templateHash;
+        public final String messageHash;
+        public final String campaignId;
 
         public Decision(Action action, String reason, EscalationLevel escalation,
-                        boolean panicMode, String cluster, String templateHash) {
+                        boolean panicMode, String cluster, String messageHash,
+                        String campaignId) {
             this.action = action;
             this.reason = reason;
             this.escalation = escalation;
             this.panicMode = panicMode;
             this.cluster = cluster;
-            this.templateHash = templateHash;
+            this.messageHash = messageHash;
+            this.campaignId = campaignId;
         }
 
         public boolean shouldSuppressDelivery() {
@@ -89,23 +97,23 @@ public final class ShieldEngine {
         }
 
         public static Decision allow(EscalationLevel escalation, boolean panicMode,
-                                     String cluster, String templateHash) {
-            return new Decision(Action.ALLOW, "allowed", escalation, panicMode, cluster, templateHash);
+                                     String cluster, String messageHash, String campaignId) {
+            return new Decision(Action.ALLOW, "allowed", escalation, panicMode, cluster, messageHash, campaignId);
         }
 
         public static Decision blocked(String reason, EscalationLevel escalation, boolean panicMode,
-                                       String cluster, String templateHash) {
-            return new Decision(Action.BLOCKED, reason, escalation, panicMode, cluster, templateHash);
+                                       String cluster, String messageHash, String campaignId) {
+            return new Decision(Action.BLOCKED, reason, escalation, panicMode, cluster, messageHash, campaignId);
         }
 
         public static Decision silenced(String reason, EscalationLevel escalation, boolean panicMode,
-                                        String cluster, String templateHash) {
-            return new Decision(Action.SILENCED, reason, escalation, panicMode, cluster, templateHash);
+                                        String cluster, String messageHash, String campaignId) {
+            return new Decision(Action.SILENCED, reason, escalation, panicMode, cluster, messageHash, campaignId);
         }
 
-        public static Decision suppressed(String reason, EscalationLevel escalation, boolean panicMode,
-                                          String cluster, String templateHash) {
-            return new Decision(Action.SUPPRESSED, reason, escalation, panicMode, cluster, templateHash);
+        public static Decision quarantined(String reason, EscalationLevel escalation, boolean panicMode,
+                                           String cluster, String messageHash, String campaignId) {
+            return new Decision(Action.QUARANTINED, reason, escalation, panicMode, cluster, messageHash, campaignId);
         }
     }
 
@@ -144,84 +152,137 @@ public final class ShieldEngine {
         }
     }
 
+    private static final class EntropySnapshot {
+        final int uniqueSenders;
+        final double entropyBits;
+        final int totalEvents;
+
+        EntropySnapshot(int uniqueSenders, double entropyBits, int totalEvents) {
+            this.uniqueSenders = uniqueSenders;
+            this.entropyBits = entropyBits;
+            this.totalEvents = totalEvents;
+        }
+    }
+
     public static synchronized Decision evaluate(Context context, String sender, String body, long nowMs) {
         if (!SettingsStore.isShieldOn(context)) {
-            return Decision.allow(currentEscalation, false, "UNKNOWN", "");
+            return Decision.allow(currentEscalation, false, "UNKNOWN", "", "");
         }
 
         String safeSender = sender == null ? "" : sender.trim();
         String safeBody = body == null ? "" : body.trim();
         String cluster = clusterKey(safeSender);
-        String templateHash = templateHash(safeBody);
+        String messageHash = messageHash(safeBody);
+        String campaignId = buildCampaignId(messageHash, nowMs);
 
         pushTime(global60, nowMs, WINDOW_60S_MS);
         pushTime(global120, nowMs, WINDOW_120S_MS);
-
         pushCluster(cluster60, cluster, nowMs, WINDOW_60S_MS);
         pushCluster(cluster120, cluster, nowMs, WINDOW_120S_MS);
-
-        pushTime(template120.computeIfAbsent(templateHash, key -> new ArrayDeque<>()), nowMs, WINDOW_120S_MS);
-        pushTemplateSender(templateHash, safeSender, nowMs);
-
+        pushTime(template120.computeIfAbsent(messageHash, key -> new ArrayDeque<>()), nowMs, WINDOW_120S_MS);
+        pushTemplateSender(messageHash, safeSender, nowMs);
         pushSenderEvent(safeSender, nowMs);
         trimMaps(nowMs);
 
-        EscalationLevel escalation = deriveEscalation(global60.size(), global120.size());
-        currentEscalation = escalation;
-        boolean panicMode = escalation == EscalationLevel.ATTACK || escalation == EscalationLevel.LOCKDOWN;
-
-        boolean trusted = isWhitelisted(context, safeSender) || isContact(context, safeSender);
-
-        if (SettingsStore.isContactsOnly(context) && !trusted) {
-            return Decision.blocked("contacts-only mode", escalation, panicMode, cluster, templateHash);
-        }
-
-        // Panic mode: during attack/lockdown, allow contacts/whitelist only.
-        if (panicMode && !trusted) {
-            return Decision.suppressed("panic mode contacts-only", escalation, panicMode, cluster, templateHash);
-        }
-
-        if (!trusted && !consumeUnknownToken(safeSender, nowMs)) {
-            return Decision.suppressed("token bucket limited unknown sender", escalation, panicMode, cluster, templateHash);
-        }
-
+        int globalCount60 = global60.size();
+        int globalCount120 = global120.size();
         int clusterCount60 = count(cluster60, cluster);
         int clusterCount120 = count(cluster120, cluster);
-        if (clusterCount120 >= CLUSTER_LOCKDOWN_120S) {
-            return Decision.suppressed("cluster lockdown traffic", escalation, panicMode, cluster, templateHash);
-        }
-        if (clusterCount120 >= CLUSTER_ATTACK_120S) {
-            return Decision.blocked("cluster attack traffic", escalation, panicMode, cluster, templateHash);
-        }
-        if (clusterCount60 >= CLUSTER_SUSPICIOUS_60S) {
-            return Decision.silenced("cluster suspicious burst", escalation, panicMode, cluster, templateHash);
-        }
-
-        boolean hasOtpToken = containsOtpToken(safeBody);
-        if (hasOtpToken) {
-            int templateCount = template120.get(templateHash).size();
-            int templateUniqueSenders = uniqueTemplateSenders(templateHash, nowMs);
-            if (templateCount >= 4 && templateUniqueSenders >= 3) {
-                return Decision.suppressed("rotating sender OTP template", escalation, panicMode, cluster, templateHash);
-            }
-        }
-
+        int templateCount120 = count(template120, messageHash);
+        int templateUniqueSenders = uniqueTemplateSenders(messageHash, nowMs);
         EntropySnapshot entropy = senderEntropy(nowMs);
-        if (entropy.uniqueSenders >= 6 && entropy.entropyBits >= 2.2d) {
-            return Decision.suppressed("high sender entropy rotation", escalation, panicMode, cluster, templateHash);
+
+        int reputationRisk = loadReputationRisk(context, cluster);
+
+        // ─── BAD CLUSTER FAST-PATH ──────────────────────────────────────────────
+        // If this cluster has a ≥70% bad-action history (reputationRisk == 3) and
+        // the sender is not trusted, skip full scoring and quarantine immediately.
+        // This prevents accumulatively-scored clusters from ever slipping through.
+        if (reputationRisk >= 3 && !isWhitelisted(context, safeSender) && !isContact(context, safeSender)) {
+            EscalationLevel fastEscalation = EscalationLevel.ATTACK;
+            currentEscalation = fastEscalation;
+            Decision fastDecision = Decision.quarantined(
+                "bad_cluster_reputation_fastpath", fastEscalation, true, cluster, messageHash, campaignId);
+            persistClusterReputation(context, cluster, fastDecision.action, nowMs);
+            persistCampaignFingerprint(context, campaignId, messageHash, cluster, fastEscalation, templateUniqueSenders, nowMs);
+            return fastDecision;
+        }
+        // ───────────────────────────────────────────────────────────────────────
+
+        int riskScore = computeRiskScore(
+            globalCount60,
+            globalCount120,
+            clusterCount120,
+            templateCount120,
+            templateUniqueSenders,
+            entropy,
+            isEnterpriseSenderFormat(safeSender),
+            containsOtpToken(safeBody),
+            reputationRisk
+        );
+
+        EscalationLevel escalation = deriveEscalation(globalCount60, globalCount120, clusterCount120, riskScore);
+        currentEscalation = escalation;
+
+        if (escalation == EscalationLevel.LOCKDOWN) {
+            long untilMs = nowMs + SettingsStore.getLockdownMinutes(context) * 60_000L;
+            SettingsStore.setLockdownUntilMs(context, untilMs);
         }
 
-        if (escalation == EscalationLevel.LOCKDOWN && !trusted) {
-            return Decision.suppressed("global lockdown", escalation, panicMode, cluster, templateHash);
-        }
-        if (escalation == EscalationLevel.ATTACK && !trusted) {
-            return Decision.blocked("global attack threshold", escalation, panicMode, cluster, templateHash);
-        }
-        if (escalation == EscalationLevel.SUSPICIOUS && isEnterpriseSenderFormat(safeSender) && !trusted) {
-            return Decision.silenced("suspicious enterprise sender burst", escalation, panicMode, cluster, templateHash);
+        if (nowMs < SettingsStore.getLockdownUntilMs(context) && escalation != EscalationLevel.LOCKDOWN) {
+            escalation = EscalationLevel.LOCKDOWN;
+            currentEscalation = EscalationLevel.LOCKDOWN;
         }
 
-        return Decision.allow(escalation, panicMode, cluster, templateHash);
+        boolean panicMode = escalation == EscalationLevel.ATTACK || escalation == EscalationLevel.LOCKDOWN;
+        boolean strictPolicy = SettingsStore.isStrictPolicy(context);
+        boolean trusted = isWhitelisted(context, safeSender) || isContact(context, safeSender);
+
+        Decision decision;
+        if (SettingsStore.isContactsOnly(context) && !trusted) {
+            decision = strictPolicy
+                ? Decision.blocked("contacts_only_policy", escalation, panicMode, cluster, messageHash, campaignId)
+                : Decision.silenced("contacts_only_policy", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (escalation == EscalationLevel.LOCKDOWN && !trusted) {
+            decision = Decision.quarantined("lockdown_contacts_only", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (panicMode && !trusted && strictPolicy) {
+            decision = Decision.quarantined("panic_mode_untrusted", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && !consumeUnknownToken(safeSender, nowMs)) {
+            decision = Decision.quarantined("unknown_sender_rate_limit", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && clusterCount120 >= CLUSTER_LOCKDOWN_120S) {
+            decision = Decision.quarantined("cluster_lockdown_traffic", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && clusterCount120 >= CLUSTER_ATTACK_120S) {
+            decision = Decision.blocked("cluster_attack_traffic", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && clusterCount60 >= CLUSTER_SUSPICIOUS_60S) {
+            decision = Decision.silenced("cluster_suspicious_burst", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && templateCount120 >= 5) {
+            // Single-condition template block: same template seen 5+ times in 120s
+            // regardless of how many unique senders — campaign bombardment pattern.
+            decision = Decision.quarantined("template_high_frequency", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && templateCount120 >= 4 && templateUniqueSenders >= 3) {
+            decision = Decision.quarantined("template_reuse_rotation", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && entropy.totalEvents > 5
+                && (double) entropy.uniqueSenders / entropy.totalEvents > 0.70d) {
+            // Entropy ratio check: if >70% of messages in 120s come from distinct
+            // senders, this is a rotating-sender attack even if absolute counts are low.
+            decision = Decision.quarantined("high_sender_entropy_ratio", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && entropy.uniqueSenders >= 6 && entropy.entropyBits >= 2.2d) {
+            decision = Decision.quarantined("high_sender_entropy", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && riskScore >= LOCKDOWN_SCORE - 1) {
+            decision = Decision.quarantined("adaptive_risk_score", escalation, panicMode, cluster, messageHash, campaignId);
+        } else if (!trusted && escalation == EscalationLevel.SUSPICIOUS && isEnterpriseSenderFormat(safeSender)) {
+            decision = Decision.silenced("suspicious_enterprise_sender", escalation, panicMode, cluster, messageHash, campaignId);
+        } else {
+            decision = Decision.allow(escalation, panicMode, cluster, messageHash, campaignId);
+        }
+
+        if (isMiuiHyperOsDevice() && !trusted && decision.action == Action.BLOCKED) {
+            decision = Decision.quarantined("miui_pipeline_resilience", escalation, panicMode, cluster, messageHash, campaignId);
+        }
+
+        persistClusterReputation(context, cluster, decision.action, nowMs);
+        persistCampaignFingerprint(context, campaignId, messageHash, cluster, escalation, templateUniqueSenders, nowMs);
+        return decision;
     }
 
     public static EscalationLevel getCurrentEscalation() {
@@ -300,17 +361,64 @@ public final class ShieldEngine {
         return queue == null ? 0 : queue.size();
     }
 
-    private static EscalationLevel deriveEscalation(int count60, int count120) {
-        if (count120 >= LOCKDOWN_LIMIT_120S) {
+    private static EscalationLevel deriveEscalation(int count60, int count120, int clusterCount120, int riskScore) {
+        if (count120 >= LOCKDOWN_LIMIT_120S || clusterCount120 >= CLUSTER_LOCKDOWN_120S || riskScore >= LOCKDOWN_SCORE) {
             return EscalationLevel.LOCKDOWN;
         }
-        if (count120 >= ATTACK_LIMIT_120S) {
+        if (count120 >= ATTACK_LIMIT_120S || clusterCount120 >= CLUSTER_ATTACK_120S || riskScore >= ATTACK_SCORE) {
             return EscalationLevel.ATTACK;
         }
-        if (count60 >= SUSPICIOUS_LIMIT_60S) {
+        if (count60 >= SUSPICIOUS_LIMIT_60S || riskScore >= SUSPICIOUS_SCORE) {
             return EscalationLevel.SUSPICIOUS;
         }
         return EscalationLevel.NORMAL;
+    }
+
+    private static int computeRiskScore(int globalCount60, int globalCount120, int clusterCount120,
+                                        int templateCount120, int templateUniqueSenders,
+                                        EntropySnapshot entropy, boolean enterpriseSender,
+                                        boolean hasOtpToken, int reputationRisk) {
+        int score = reputationRisk;
+
+        if (globalCount60 >= SUSPICIOUS_LIMIT_60S) {
+            score += 2;
+        }
+        if (globalCount120 >= ATTACK_LIMIT_120S) {
+            score += 3;
+        }
+        if (clusterCount120 >= CLUSTER_ATTACK_120S) {
+            score += 3;
+        } else if (clusterCount120 >= CLUSTER_SUSPICIOUS_60S) {
+            score += 1;
+        }
+
+        if (templateCount120 >= 3) {
+            score += 2;
+        }
+        if (templateCount120 >= 5) {
+            score += 2;
+        }
+        if (templateUniqueSenders >= 3) {
+            score += 2;
+        }
+
+        if (entropy.uniqueSenders >= 5) {
+            score += 2;
+        }
+        if (entropy.uniqueSenders >= 8) {
+            score += 2;
+        }
+        if (entropy.entropyBits >= 2.2d) {
+            score += 2;
+        }
+        if (entropy.entropyBits >= 2.8d) {
+            score += 1;
+        }
+
+        if (enterpriseSender && hasOtpToken) {
+            score += 1;
+        }
+        return score;
     }
 
     private static boolean containsOtpToken(String body) {
@@ -343,7 +451,7 @@ public final class ShieldEngine {
         return "UNKNOWN";
     }
 
-    private static String templateHash(String body) {
+    private static String messageHash(String body) {
         String canonical = body.toLowerCase(Locale.US)
             .replaceAll("\\d", "")
             .replaceAll("\\s+", " ")
@@ -360,10 +468,15 @@ public final class ShieldEngine {
             for (int i = 0; i < Math.min(bytes.length, 8); i++) {
                 hex.append(String.format(Locale.US, "%02x", bytes[i]));
             }
-            return hex.toString();
+            return "otp_template_" + hex;
         } catch (NoSuchAlgorithmException e) {
-            return Integer.toHexString(canonical.hashCode());
+            return "otp_template_" + Integer.toHexString(canonical.hashCode());
         }
+    }
+
+    private static String buildCampaignId(String messageHash, long nowMs) {
+        long windowBucket = nowMs / WINDOW_120S_MS;
+        return messageHash + "_" + Long.toString(windowBucket, 36);
     }
 
     private static int uniqueTemplateSenders(String templateHash, long nowMs) {
@@ -380,20 +493,10 @@ public final class ShieldEngine {
         return unique.size();
     }
 
-    private static final class EntropySnapshot {
-        final int uniqueSenders;
-        final double entropyBits;
-
-        EntropySnapshot(int uniqueSenders, double entropyBits) {
-            this.uniqueSenders = uniqueSenders;
-            this.entropyBits = entropyBits;
-        }
-    }
-
     private static EntropySnapshot senderEntropy(long nowMs) {
         trimSenderEvents(senderEvents120, nowMs, WINDOW_120S_MS);
         if (senderEvents120.isEmpty()) {
-            return new EntropySnapshot(0, 0.0d);
+            return new EntropySnapshot(0, 0.0d, 0);
         }
 
         Map<String, Integer> frequencies = new HashMap<>();
@@ -409,7 +512,7 @@ public final class ShieldEngine {
             entropy += -p * (Math.log(p) / Math.log(2));
         }
 
-        return new EntropySnapshot(frequencies.size(), entropy);
+        return new EntropySnapshot(frequencies.size(), entropy, senderEvents120.size());
     }
 
     private static boolean consumeUnknownToken(String sender, long nowMs) {
@@ -426,7 +529,89 @@ public final class ShieldEngine {
         if (sender == null || sender.isEmpty()) {
             return false;
         }
-        return PREFIX_PATTERN.matcher(sender.toUpperCase(Locale.US)).matches();
+        return ENTERPRISE_PATTERN.matcher(sender.toUpperCase(Locale.US)).matches();
+    }
+
+    private static boolean isMiuiHyperOsDevice() {
+        String brand = Build.BRAND == null ? "" : Build.BRAND.toLowerCase(Locale.US);
+        String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase(Locale.US);
+        return brand.contains("xiaomi")
+            || brand.contains("redmi")
+            || brand.contains("poco")
+            || manufacturer.contains("xiaomi");
+    }
+
+    private static int loadReputationRisk(Context context, String cluster) {
+        SenderClusterReputationEntity entity = ShieldDatabase.get(context)
+            .senderClusterReputationDao()
+            .byCluster(cluster);
+
+        if (entity == null || entity.totalCount < 5) {
+            return 0;
+        }
+
+        double suspiciousRatio = (double) (entity.blockedCount + entity.silencedCount + entity.quarantinedCount)
+            / (double) entity.totalCount;
+
+        if (suspiciousRatio >= 0.7d) {
+            return 3;
+        }
+        if (suspiciousRatio >= 0.45d) {
+            return 2;
+        }
+        if (suspiciousRatio >= 0.3d) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private static void persistClusterReputation(Context context, String cluster, Action action, long nowMs) {
+        SenderClusterReputationDao dao = ShieldDatabase.get(context).senderClusterReputationDao();
+        SenderClusterReputationEntity entity = dao.byCluster(cluster);
+        if (entity == null) {
+            entity = new SenderClusterReputationEntity(cluster, 0, 0, 0, 0, nowMs);
+        }
+
+        entity.totalCount += 1;
+        entity.lastSeenMs = nowMs;
+        if (action == Action.BLOCKED) {
+            entity.blockedCount += 1;
+        } else if (action == Action.SILENCED) {
+            entity.silencedCount += 1;
+        } else if (action == Action.QUARANTINED) {
+            entity.quarantinedCount += 1;
+        }
+        dao.upsert(entity);
+    }
+
+    private static void persistCampaignFingerprint(Context context, String campaignId, String messageHash,
+                                                   String cluster, EscalationLevel escalation,
+                                                   int uniqueSenderCount, long nowMs) {
+        CampaignFingerprintDao dao = ShieldDatabase.get(context).campaignFingerprintDao();
+        CampaignFingerprintEntity entity = dao.byCampaignId(campaignId);
+        if (entity == null) {
+            entity = new CampaignFingerprintEntity(
+                campaignId,
+                messageHash,
+                cluster,
+                escalation.name(),
+                nowMs,
+                nowMs,
+                0,
+                uniqueSenderCount
+            );
+        }
+
+        entity.lastSeenMs = nowMs;
+        entity.totalCount += 1;
+        entity.uniqueSenderCount = Math.max(entity.uniqueSenderCount, uniqueSenderCount);
+        if (escalation.ordinal() > EscalationLevel.valueOf(entity.highestEscalation).ordinal()) {
+            entity.highestEscalation = escalation.name();
+        }
+        if (entity.topCluster.equals("UNKNOWN") && !cluster.equals("UNKNOWN")) {
+            entity.topCluster = cluster;
+        }
+        dao.upsert(entity);
     }
 
     private static boolean isWhitelisted(Context context, String sender) {

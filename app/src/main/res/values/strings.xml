@@ -4,7 +4,7 @@
     <string name="shield_switch">Shield Mode</string>
     <string name="contacts_only_switch">Allow only contacts + whitelist</string>
     <string name="stats_placeholder">Blocked Today: 0</string>
-    <string name="stats_template">Blocked: %1$d\nSilenced: %2$d\nSuppressed: %3$d\nAttackers: %4$d\nEscalation: %5$s\nPanic Mode: %6$s\nDefault SMS App: %7$s\nPermissions: %8$s</string>
+    <string name="stats_template">Blocked: %1$d\nSilenced: %2$d\nQuarantined: %3$d\nAttackers: %4$d\nEscalation: %5$s\nPanic Mode: %6$s\nDefault SMS App: %7$s\nPermissions: %8$s</string>
     <string name="open_logs">Open Attack Logs</string>
     <string name="manage_whitelist">Whitelist Manager</string>
     <string name="log_title">Attack Logs</string>
@@ -18,6 +18,9 @@
     <string name="export_json">Export JSON</string>
     <string name="export_ok">Exported to: %1$s</string>
     <string name="export_fail">Export failed: %1$s</string>
+    <string name="restore_only_quarantined">Only quarantined messages can be restored.</string>
+    <string name="restore_ok">Message restored to inbox.</string>
+    <string name="restore_fail">Restore failed.</string>
     <string name="default_sms_yes">Yes</string>
     <string name="default_sms_no">No</string>
     <string name="permission_ok">Granted</string>

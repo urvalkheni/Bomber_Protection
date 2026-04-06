@@ -32,10 +32,13 @@ public class AttackLogEntity {
     @NonNull
     public String templateHash;
 
+    @NonNull
+    public String campaignId;
+
     public AttackLogEntity(long timestamp, @NonNull String sender, @NonNull String body,
                            @NonNull String action, @NonNull String reason,
                            @NonNull String escalation, @NonNull String cluster,
-                           @NonNull String templateHash) {
+                           @NonNull String templateHash, @NonNull String campaignId) {
         this.timestamp = timestamp;
         this.sender = sender;
         this.body = body;
@@ -44,5 +47,6 @@ public class AttackLogEntity {
         this.escalation = escalation;
         this.cluster = cluster;
         this.templateHash = templateHash;
+        this.campaignId = campaignId;
     }
 }

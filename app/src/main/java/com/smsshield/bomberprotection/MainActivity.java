@@ -97,7 +97,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshStats() {
         AttackLogStore.Stats stats = AttackLogStore.getStats(this);
-        boolean isDefaultSmsApp = getPackageName().equals(Telephony.Sms.getDefaultSmsPackage(this));
+        boolean isDefaultSmsApp = isDefaultSmsApp();
         String defaultStatus = isDefaultSmsApp
             ? getString(R.string.default_sms_yes)
             : getString(R.string.default_sms_no);
@@ -111,7 +111,7 @@ public class MainActivity extends AppCompatActivity {
             R.string.stats_template,
             stats.blockedToday,
             stats.silencedToday,
-            stats.suppressedToday,
+            stats.quarantinedToday,
             stats.attackersToday,
             ShieldEngine.getCurrentEscalation().name(),
             ShieldEngine.isPanicModeActive() ? getString(R.string.default_sms_yes) : getString(R.string.default_sms_no),
@@ -119,5 +119,19 @@ public class MainActivity extends AppCompatActivity {
             permissionStatus
         );
         statsText.setText(summary);
+    }
+
+    /**
+     * Check if this app is the default SMS handler.
+     * On API 29+ (Android 10+) the authoritative check is RoleManager.isRoleHeld().
+     * HyperOS/MIUI can return incorrect package names from getDefaultSmsPackage(),
+     * so we use the RoleManager path whenever available.
+     */
+    private boolean isDefaultSmsApp() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            RoleManager roleManager = getSystemService(RoleManager.class);
+            return roleManager != null && roleManager.isRoleHeld(RoleManager.ROLE_SMS);
+        }
+        return getPackageName().equals(Telephony.Sms.getDefaultSmsPackage(this));
     }
 }

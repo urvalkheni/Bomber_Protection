@@ -1,6 +1,8 @@
 package com.smsshield.bomberprotection;
 
+import android.content.ContentValues;
 import android.content.Context;
+import android.provider.Telephony;
 
 import androidx.annotation.NonNull;
 
@@ -26,6 +28,7 @@ public final class AttackLogStore {
     }
 
     public static final class LogItem {
+        public final long id;
         public final String sender;
         public final String body;
         public final long timestamp;
@@ -33,9 +36,12 @@ public final class AttackLogStore {
         public final String reason;
         public final String escalation;
         public final String cluster;
+        public final String messageHash;
+        public final String campaignId;
 
-        public LogItem(String sender, String body, long timestamp, String action, String reason,
-                       String escalation, String cluster) {
+        public LogItem(long id, String sender, String body, long timestamp, String action, String reason,
+                       String escalation, String cluster, String messageHash, String campaignId) {
+            this.id = id;
             this.sender = sender;
             this.body = body;
             this.timestamp = timestamp;
@@ -43,19 +49,21 @@ public final class AttackLogStore {
             this.reason = reason;
             this.escalation = escalation;
             this.cluster = cluster;
+            this.messageHash = messageHash;
+            this.campaignId = campaignId;
         }
     }
 
     public static final class Stats {
         public final int blockedToday;
         public final int silencedToday;
-        public final int suppressedToday;
+        public final int quarantinedToday;
         public final int attackersToday;
 
-        public Stats(int blockedToday, int silencedToday, int suppressedToday, int attackersToday) {
+        public Stats(int blockedToday, int silencedToday, int quarantinedToday, int attackersToday) {
             this.blockedToday = blockedToday;
             this.silencedToday = silencedToday;
-            this.suppressedToday = suppressedToday;
+            this.quarantinedToday = quarantinedToday;
             this.attackersToday = attackersToday;
         }
     }
@@ -79,12 +87,12 @@ public final class AttackLogStore {
 
     public static synchronized void addLog(Context context, String sender, String body, String action,
                                            String reason) {
-        addLog(context, sender, body, action, reason, "NORMAL", "UNKNOWN", "");
+        addLog(context, sender, body, action, reason, "NORMAL", "UNKNOWN", "", "");
     }
 
     public static synchronized void addLog(Context context, String sender, String body, String action,
                                            String reason, String escalation, String cluster,
-                                           String templateHash) {
+                                           String messageHash, String campaignId) {
         AttackLogEntity entity = new AttackLogEntity(
             System.currentTimeMillis(),
             sanitize(sender),
@@ -93,7 +101,8 @@ public final class AttackLogStore {
             sanitize(reason),
             sanitize(escalation),
             sanitize(cluster),
-            sanitize(templateHash)
+            sanitize(messageHash),
+            sanitize(campaignId)
         );
 
         AttackLogDao attackLogDao = dao(context);
@@ -106,13 +115,16 @@ public final class AttackLogStore {
         List<LogItem> out = new ArrayList<>();
         for (AttackLogEntity item : records) {
             out.add(new LogItem(
+                item.id,
                 item.sender,
                 item.body,
                 item.timestamp,
                 item.action,
                 item.reason,
                 item.escalation,
-                item.cluster
+                item.cluster,
+                item.templateHash,
+                item.campaignId
             ));
         }
         return out;
@@ -123,9 +135,9 @@ public final class AttackLogStore {
         AttackLogDao attackLogDao = dao(context);
         int blocked = attackLogDao.countByActionSince(since, "BLOCKED");
         int silenced = attackLogDao.countByActionSince(since, "SILENCED");
-        int suppressed = attackLogDao.countByActionSince(since, "SUPPRESSED");
+        int quarantined = attackLogDao.countByActionSince(since, "QUARANTINED");
         int attackers = attackLogDao.uniqueAttackersSince(since);
-        return new Stats(blocked, silenced, suppressed, attackers);
+        return new Stats(blocked, silenced, quarantined, attackers);
     }
 
     public static File exportJson(Context context) throws IOException, JSONException {
@@ -133,12 +145,14 @@ public final class AttackLogStore {
         JSONArray array = new JSONArray();
         for (AttackLogEntity item : all) {
             JSONObject obj = new JSONObject();
-            obj.put("timestamp", item.timestamp);
+            obj.put("timestamp", toIso(item.timestamp));
             obj.put("sender", item.sender);
-            obj.put("action", item.action);
-            obj.put("reason", item.reason);
-            obj.put("escalation", item.escalation);
             obj.put("cluster", item.cluster);
+            obj.put("decision", item.action);
+            obj.put("reason", item.reason);
+            obj.put("message_hash", item.templateHash);
+            obj.put("campaign_id", item.campaignId);
+            obj.put("escalation", item.escalation);
             obj.put("body", item.body);
             array.put(obj);
         }
@@ -152,15 +166,16 @@ public final class AttackLogStore {
     public static File exportCsv(Context context) throws IOException {
         List<AttackLogEntity> all = dao(context).all();
         StringBuilder csv = new StringBuilder();
-        csv.append("timestamp,sender,action,reason,escalation,cluster,body\n");
+        csv.append("timestamp,sender,cluster,decision,reason,message_hash,campaign_id,escalation\n");
         for (AttackLogEntity item : all) {
-            csv.append(item.timestamp).append(',')
+            csv.append(csvCell(toIso(item.timestamp))).append(',')
                 .append(csvCell(item.sender)).append(',')
+                .append(csvCell(item.cluster)).append(',')
                 .append(csvCell(item.action)).append(',')
                 .append(csvCell(item.reason)).append(',')
-                .append(csvCell(item.escalation)).append(',')
-                .append(csvCell(item.cluster)).append(',')
-                .append(csvCell(item.body)).append('\n');
+                .append(csvCell(item.templateHash)).append(',')
+                .append(csvCell(item.campaignId)).append(',')
+                .append(csvCell(item.escalation)).append('\n');
         }
 
         String name = "attack_logs_" + stamp() + ".csv";
@@ -171,6 +186,10 @@ public final class AttackLogStore {
 
     private static String stamp() {
         return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+    }
+
+    private static String toIso(long epochMs) {
+        return new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(new Date(epochMs));
     }
 
     private static File exportDir(Context context) {
@@ -190,5 +209,30 @@ public final class AttackLogStore {
     private static String csvCell(String value) {
         String safe = sanitize(value).replace("\"", "\"\"");
         return "\"" + safe + "\"";
+    }
+
+    public static synchronized boolean restoreQuarantined(Context context, long logId) {
+        AttackLogDao attackLogDao = dao(context);
+        AttackLogEntity record = attackLogDao.byId(logId);
+        if (record == null || !"QUARANTINED".equals(record.action)) {
+            return false;
+        }
+
+        ContentValues values = new ContentValues();
+        values.put(Telephony.Sms.ADDRESS, record.sender);
+        values.put(Telephony.Sms.BODY, record.body);
+        values.put(Telephony.Sms.DATE, System.currentTimeMillis());
+        values.put(Telephony.Sms.READ, 0);
+        values.put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX);
+
+        try {
+            if (context.getContentResolver().insert(Telephony.Sms.Inbox.CONTENT_URI, values) == null) {
+                return false;
+            }
+            attackLogDao.updateDecision(logId, "RESTORED", "restored_from_quarantine");
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 }

@@ -15,6 +15,8 @@ import java.util.Date;
 import java.util.List;
 
 public class AttackLogActivity extends AppCompatActivity {
+    private List<AttackLogStore.LogItem> items;
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -42,12 +44,13 @@ public class AttackLogActivity extends AppCompatActivity {
             }
         });
 
-        List<AttackLogStore.LogItem> items = AttackLogStore.getLogs(this);
+        items = AttackLogStore.getLogs(this);
         List<String> rows = new ArrayList<>();
         for (AttackLogStore.LogItem item : items) {
             String when = DateFormat.format("dd MMM HH:mm:ss", new Date(item.timestamp)).toString();
             rows.add("[" + item.action + "] " + item.sender + "\n"
-                + item.reason + " | escalation=" + item.escalation + " | cluster=" + item.cluster + "\n"
+            + item.reason + " | escalation=" + item.escalation + " | cluster=" + item.cluster + "\n"
+            + "hash=" + item.messageHash + " | campaign=" + item.campaignId + "\n"
                 + when + "\n"
                 + item.body);
         }
@@ -62,5 +65,26 @@ public class AttackLogActivity extends AppCompatActivity {
             rows
         );
         listView.setAdapter(adapter);
+
+        listView.setOnItemLongClickListener((parent, view, position, id) -> {
+            if (position < 0 || position >= items.size()) {
+                return true;
+            }
+
+            AttackLogStore.LogItem item = items.get(position);
+            if (!"QUARANTINED".equals(item.action)) {
+                Toast.makeText(this, R.string.restore_only_quarantined, Toast.LENGTH_SHORT).show();
+                return true;
+            }
+
+            boolean ok = AttackLogStore.restoreQuarantined(this, item.id);
+            if (ok) {
+                Toast.makeText(this, R.string.restore_ok, Toast.LENGTH_SHORT).show();
+                recreate();
+            } else {
+                Toast.makeText(this, R.string.restore_fail, Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        });
     }
 }

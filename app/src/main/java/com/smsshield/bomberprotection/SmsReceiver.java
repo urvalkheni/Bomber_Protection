@@ -1,5 +1,6 @@
 package com.smsshield.bomberprotection;
 
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -28,7 +29,8 @@ public class SmsReceiver extends BroadcastReceiver {
         ShieldEngine.Decision decision = ShieldEngine.evaluate(context, sender, body, System.currentTimeMillis());
         if (decision.shouldSuppressDelivery()) {
             abortBroadcast();
-            setResultCode(0);
+            setResultCode(Activity.RESULT_CANCELED);
+            SmsNotificationSuppressor.suppress(context);
             AttackLogStore.addLog(
                 context,
                 sender,
@@ -37,7 +39,8 @@ public class SmsReceiver extends BroadcastReceiver {
                 decision.reason,
                 decision.escalation.name(),
                 decision.cluster,
-                decision.templateHash
+                decision.messageHash,
+                decision.campaignId
             );
             return;
         }
@@ -50,7 +53,8 @@ public class SmsReceiver extends BroadcastReceiver {
             decision.reason,
             decision.escalation.name(),
             decision.cluster,
-            decision.templateHash
+            decision.messageHash,
+            decision.campaignId
         );
     }
 }

@@ -1,0 +1,22 @@
+﻿cmd : '.\gradlew.bat' is 
+not recognized as an 
+internal or external 
+command,
+At line:1 char:1
++ cmd /c ".\gradlew.bat 
+assembleDebug" 2>&1 | 
+Out-File -FilePath "build 
+...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: ('  
+  .\gradlew.bat'...tern   
+ al command,:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+operable program or batch 
+file.
