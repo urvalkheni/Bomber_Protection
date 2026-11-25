@@ -3,18 +3,18 @@
 Date: 2026-03-06
 Project: `com.smsshield.bomberprotection`
 
-## 1. Device Matrix (Fill/Confirm)
+## 1. Device Matrix (Placeholder / Template)
 
-Status: partially prefilled from your input, hardware-only fields must be confirmed on device.
+Status: anonymized placeholder values — update with final target test device details after development is complete.
 
-- Device Brand: Xiaomi
-- Model: Poco X6
-- Android Version: Android 14
-- OS Layer: HyperOS
-- Security Patch: `TODO: confirm from Settings > Security & Privacy > Security update`
-- Region: India
-- Dual SIM: `TODO: Yes/No`
-- Carrier: `TODO: Jio / Airtel / VI`
+- Device Brand: `<Device_Brand_Placeholder>` (e.g., `Generic OEM`)
+- Model: `<Device_Model_Placeholder>` (e.g., `Test Device A`)
+- Android Version: `Android 14 (API 34)`
+- OS Layer: `<OS_Layer_Placeholder>` (e.g., `AOSP / OEM Skin`)
+- Security Patch: `<YYYY-MM-DD>`
+- Region: `<Region_Placeholder>`
+- Dual SIM: `<Yes/No>`
+- Carrier: `<Carrier_Placeholder>`
 
 ## 2. Default SMS App Proof
 
@@ -76,6 +76,7 @@ Manifest-declared:
 - `RECEIVE_SMS`
 - `READ_SMS`
 - `SEND_SMS`
+- `WRITE_SMS`
 - `READ_CONTACTS`
 - `POST_NOTIFICATIONS`
 
@@ -171,5 +172,22 @@ Forensic exports:
 Dashboard counters:
 - `BLOCKED`, `SILENCED`, `QUARANTINED`, `Attackers`
 
+## 13. Dummy Statistics & Benchmark Metrics (Placeholder)
+
+> [!NOTE]
+> All metrics below are **dummy placeholder statistics** for template/reporting purposes until final end-to-end testing is completed.
+
+| Metric | Dummy Value | Notes |
+| :--- | :--- | :--- |
+| **Total SMS Processed** | `150` | Simulated mixed normal + burst traffic |
+| **`ALLOW`** | `32` | Contacts, whitelisted, and expected OTPs |
+| **`SILENCED`** | `24` | Suspicious bursts muted without quarantine |
+| **`QUARANTINED`** | `68` | High-risk rotating-sender / template-reuse messages |
+| **`BLOCKED`** | `26` | High-confidence attack / lockdown drops |
+| **Unique Sender Clusters** | `6` | e.g., `VM`, `JK`, `BZ` (synthetic) |
+| **Detected Campaigns** | `3` | Grouped via `campaign_id` / `message_hash` |
+| **False Positive Rate (Est.)** | `< 2.0%` | Placeholder target under `strict_policy=true` |
+| **Lockdown Triggers** | `2` | 5-minute default lockdown activations |
+
 ---
-This report reflects the codebase state after the v2 rotating-sender defense upgrade in this workspace.
+This report reflects the codebase state after the v2 rotating-sender defense upgrade in this workspace (with personal device details anonymized and placeholder statistics added).
